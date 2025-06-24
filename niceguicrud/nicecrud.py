@@ -186,6 +186,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
         self.on_validation_result = on_validation_result
         self.subitem_dialog = None
         self.basemodeltype = type(item)
+        self.json_schema = self.basemodeltype.model_json_schema(mode="serialization")
         super().__init__()
         # As create_card needs to be async, use timer to run it in the nicegui
         # asyncio event loop
@@ -279,6 +280,22 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
             _readonly = extra.get("readonly", False)
             _selections = extra.get("selections")
         _optional = False
+
+        schema_field = self.json_schema.get("properties", {}).get(field_name, {})
+        schema_optional = False
+        if "anyOf" in schema_field:
+            non_null = [x for x in schema_field["anyOf"] if x.get("type") != "null"]
+            if len(non_null) == 1:
+                schema_field = non_null[0]
+                schema_optional = True
+        if schema_field.get("enum") and _input_type is None:
+            _input_type = "select"
+            if _selections is None:
+                _selections = {str(x): str(x) for x in schema_field.get("enum", [])}
+        field_type = schema_field.get("type")
+        fmt = schema_field.get("format")
+        if schema_optional:
+            _optional = True
         # Generate the UI elements
         ele = None
         if typing.get_origin(typ) in {Union, UnionType}:
@@ -375,7 +392,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
                 )
 
         ## .. Simple string
-        elif typ is str:
+        elif field_type == "string" and fmt not in {"date", "time", "date-time"}:
             # String Inputs
             ele = ui.input(
                 value=curval, validation=validation, placeholder=field_info.description or ""
@@ -384,7 +401,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
                 ele.props("clearable")
 
         ## .. Date
-        elif typ is date:
+        elif field_type == "string" and fmt == "date":
             with ui.input(value=curval, validation=validation) as dates:
                 with ui.menu().props("no-parent-event") as menu:
                     with ui.date().bind_value(dates):
@@ -395,7 +412,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
             ele = dates
 
         ## .. Time
-        elif typ is time:
+        elif field_type == "string" and fmt == "time":
             with ui.input(value=curval, validation=validation) as times:
                 with ui.menu().props("no-parent-event") as menu:
                     with ui.time().bind_value(times):
@@ -406,7 +423,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
             ele = times
 
         ## .. Datetime
-        elif typ is datetime:
+        elif field_type == "string" and fmt == "date-time":
 
             def update_datetime():
                 log.debug(
@@ -444,7 +461,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
             ele = datetimes
 
         ## .. Numbers
-        elif typ in (int, float):
+        elif field_type in ("integer", "number"):
             # Number inputs
             if _input_type == "number" or _input_type is None or _min is None or _max is None:
                 ele = ui.number(
@@ -475,7 +492,7 @@ class NiceCRUDCard(FieldHelperMixin, Generic[T]):
             )
 
         ## .. Boolean
-        elif typ is bool:
+        elif field_type == "boolean":
             ele = ui.switch(value=curval, on_change=validation_refresh)
 
         ## .. another BaseModel
